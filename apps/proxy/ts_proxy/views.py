@@ -36,6 +36,8 @@ from .url_utils import (
     get_stream_object,
     get_alternate_streams,
 )
+from apps.channels.recording_lock_manager import RecordingLockManager
+from apps.channels.recording_locks import get_active_lock
 from .utils import get_logger
 from uuid import UUID
 import gevent
@@ -51,6 +53,29 @@ def stream_ts(request, channel_id):
 
     """Stream TS data to client with immediate response and keep-alive packets during initialization"""
     channel = get_stream_object(channel_id)
+    lock_manager = RecordingLockManager()
+    lock_decision = lock_manager.check_stream_allowed(
+        channel_id, user_id=getattr(request.user, "id", None)
+    )
+    if not lock_decision["allowed"]:
+        active_lock = get_active_lock()
+        recording = active_lock.recording if active_lock else None
+        return JsonResponse(
+            {
+                "error": "recording_lock_active",
+                "locked": True,
+                "lock_id": lock_decision["lock_id"],
+                "recording_id": lock_decision["recording_id"],
+                "recording_channel_id": str(recording.channel_id) if recording else None,
+                "recording_channel_name": recording.channel.name if recording else None,
+                "recording_title": recording.channel.name if recording else None,
+                "expected_end": recording.end_time.isoformat() if recording else None,
+                "override_available": lock_decision["override_allowed"],
+                "override_requires_confirmation": lock_decision["override_requires_confirmation"],
+                "override_confirmation_text": lock_decision["override_confirmation_text"],
+            },
+            status=423,
+        )
 
     client_user_agent = None
     proxy_server = ProxyServer.get_instance()

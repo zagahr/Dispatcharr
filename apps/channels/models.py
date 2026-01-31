@@ -10,6 +10,7 @@ import hashlib
 import json
 from apps.epg.models import EPGData
 from apps.accounts.models import User
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -642,6 +643,47 @@ class Recording(models.Model):
 
     def __str__(self):
         return f"{self.channel.name} - {self.start_time} to {self.end_time}"
+
+
+class LockStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    RELEASED = "released", "Released"
+    COOLDOWN = "cooldown", "Cooldown"
+
+
+class RecordingLock(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    recording = models.ForeignKey(
+        "Recording", on_delete=models.CASCADE, related_name="locks"
+    )
+    status = models.CharField(
+        max_length=20, choices=LockStatus.choices, default=LockStatus.ACTIVE
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    cooldown_until = models.DateTimeField(null=True, blank=True)
+    history = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["status"],
+                condition=models.Q(status=LockStatus.ACTIVE),
+                name="unique_active_recording_lock",
+            )
+        ]
+
+    def add_history_event(self, event):
+        if not isinstance(event, dict):
+            raise ValidationError("History event must be a dictionary.")
+        event = {
+            "timestamp": timezone.now().isoformat(),
+            **event,
+        }
+        self.history = (self.history or []) + [event]
+        self.save(update_fields=["history", "updated_at"])
+        return event
 
 
 class RecurringRecordingRule(models.Model):
