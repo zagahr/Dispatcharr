@@ -19,13 +19,16 @@ from .models import (
     DVR_SETTINGS_KEY,
     NETWORK_ACCESS_KEY,
     PROXY_SETTINGS_KEY,
+    RECORDING_PROTECTION_KEY,
 )
 from .serializers import (
     UserAgentSerializer,
     StreamProfileSerializer,
     CoreSettingsSerializer,
     ProxySettingsSerializer,
+    RecordingProtectionSettingsSerializer,
 )
+from .recording_protection import RecordingProtectionConfig, get_recording_protection_defaults
 
 import socket
 import requests
@@ -234,6 +237,73 @@ class ProxySettingsViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get', 'patch'])
     def settings(self, request):
         """Get or update the proxy settings."""
+        if request.method == 'GET':
+            return self.list(request)
+        elif request.method == 'PATCH':
+            return self.partial_update(request)
+
+
+class RecordingProtectionSettingsViewSet(viewsets.ViewSet):
+    """
+    API endpoint for recording protection settings stored as JSON in CoreSettings.
+    """
+    serializer_class = RecordingProtectionSettingsSerializer
+
+    def _get_or_create_settings(self):
+        """Get or create the recording protection CoreSettings entry"""
+        try:
+            settings_obj = CoreSettings.objects.get(key=RECORDING_PROTECTION_KEY)
+            settings_data = RecordingProtectionConfig.load(settings_obj.value).to_dict()
+        except CoreSettings.DoesNotExist:
+            settings_data = get_recording_protection_defaults()
+            settings_obj, created = CoreSettings.objects.get_or_create(
+                key=RECORDING_PROTECTION_KEY,
+                defaults={
+                    "name": "Recording Protection Settings",
+                    "value": settings_data,
+                },
+            )
+        return settings_obj, settings_data
+
+    def list(self, request):
+        """Return recording protection settings"""
+        settings_obj, settings_data = self._get_or_create_settings()
+        return Response(settings_data)
+
+    def retrieve(self, request, pk=None):
+        """Return recording protection settings regardless of ID"""
+        settings_obj, settings_data = self._get_or_create_settings()
+        return Response(settings_data)
+
+    def update(self, request, pk=None):
+        """Update recording protection settings"""
+        settings_obj, current_data = self._get_or_create_settings()
+
+        serializer = RecordingProtectionSettingsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        settings_obj.value = serializer.validated_data
+        settings_obj.save()
+
+        return Response(serializer.validated_data)
+
+    def partial_update(self, request, pk=None):
+        """Partially update recording protection settings"""
+        settings_obj, current_data = self._get_or_create_settings()
+
+        updated_data = {**current_data, **request.data}
+
+        serializer = RecordingProtectionSettingsSerializer(data=updated_data)
+        serializer.is_valid(raise_exception=True)
+
+        settings_obj.value = serializer.validated_data
+        settings_obj.save()
+
+        return Response(serializer.validated_data)
+
+    @action(detail=False, methods=['get', 'patch'])
+    def settings(self, request):
+        """Get or update the recording protection settings."""
         if request.method == 'GET':
             return self.list(request)
         elif request.method == 'PATCH':
