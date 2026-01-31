@@ -24,6 +24,8 @@ from apps.accounts.permissions import (
 from core.models import UserAgent, CoreSettings
 from core.utils import RedisClient
 
+from .recording_lock_manager import RecordingLockManager
+from .recording_locks import get_active_lock
 from .models import (
     Stream,
     Channel,
@@ -62,6 +64,7 @@ from apps.vod.models import Movie, Series
 from django.db.models import Q
 from django.http import StreamingHttpResponse, FileResponse, Http404
 from django.utils import timezone
+from django.core.exceptions import ValidationError as DjangoValidationError
 import mimetypes
 from django.conf import settings
 
@@ -2639,3 +2642,112 @@ class BulkRemoveSeriesRecordingsAPIView(APIView):
         except Exception:
             pass
         return Response({"success": True, "removed": count})
+
+
+class RecordingLockStatusAPIView(APIView):
+    permission_classes = [Authenticated]
+
+    def get(self, request):
+        config = CoreSettings.get_recording_protection_settings()
+        lock_manager = RecordingLockManager(config=config)
+        lock = get_active_lock()
+
+        active_recordings = []
+        cooldown_until = None
+        lock_id = None
+        locked = False
+
+        if lock:
+            recording = lock.recording
+            locked = lock_manager.is_locked()
+            lock_id = str(lock.id)
+            cooldown_until = lock.cooldown_until.isoformat() if lock.cooldown_until else None
+            active_recordings.append(
+                {
+                    "recording_id": str(recording.id),
+                    "channel_id": str(recording.channel_id),
+                    "channel_name": recording.channel.name,
+                    "title": recording.channel.name,
+                    "expected_end": recording.end_time.isoformat() if recording.end_time else None,
+                    "lock_status": lock.status,
+                }
+            )
+
+        return Response(
+            {
+                "locked": locked,
+                "lock_id": lock_id,
+                "active_recordings": active_recordings,
+                "stream_capacity": config.max_concurrent_streams,
+                "override_available": config.allow_override,
+                "cooldown_until": cooldown_until,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class RecordingLockOverrideAPIView(APIView):
+    permission_classes = [Authenticated]
+
+    def post(self, request):
+        lock = get_active_lock()
+        if not lock:
+            return Response({"error": "no_active_lock"}, status=status.HTTP_409_CONFLICT)
+
+        confirmation_text = request.data.get("confirmation_text")
+        valid_for_seconds = request.data.get("valid_for_seconds", 300)
+
+        lock_manager = RecordingLockManager()
+        try:
+            override_result = lock_manager.override(
+                confirmation_text=confirmation_text,
+                valid_for_seconds=valid_for_seconds,
+            )
+        except DjangoValidationError as exc:
+            message = exc.messages[0] if hasattr(exc, "messages") and exc.messages else "invalid_request"
+            if message == "invalid_confirmation":
+                return Response({"error": "invalid_confirmation"}, status=status.HTTP_400_BAD_REQUEST)
+            if message == "override_not_allowed":
+                return Response({"error": "override_not_allowed"}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        recording = lock.recording
+        interrupted = override_result.get("interrupted_recordings", [])
+
+        try:
+            channel_uuid = str(recording.channel.uuid)
+            from apps.proxy.ts_proxy.redis_keys import RedisKeys
+            from apps.proxy.ts_proxy.services.channel_service import ChannelService
+
+            r = RedisClient.get_client()
+            if r:
+                client_set_key = RedisKeys.clients(channel_uuid)
+                client_ids = r.smembers(client_set_key) or []
+                for raw_id in client_ids:
+                    try:
+                        cid = raw_id.decode("utf-8") if isinstance(raw_id, (bytes, bytearray)) else str(raw_id)
+                        meta_key = RedisKeys.client_metadata(channel_uuid, cid)
+                        ua = r.hget(meta_key, "user_agent")
+                        ua_s = ua.decode("utf-8") if isinstance(ua, (bytes, bytearray)) else (ua or "")
+                        if ua_s and "Dispatcharr-DVR" in ua_s:
+                            ChannelService.stop_client(channel_uuid, cid)
+                    except Exception as inner:
+                        logger.debug(f"Error stopping DVR client: {inner}")
+                try:
+                    remaining = r.scard(client_set_key) or 0
+                except Exception:
+                    remaining = 0
+                if remaining == 0:
+                    ChannelService.stop_channel(channel_uuid)
+        except Exception as e:
+            logger.debug(f"Unable to stop DVR clients for override: {e}")
+
+        lock_manager.release(recording.id)
+
+        return Response(
+            {
+                "override_token": override_result.get("token"),
+                "interrupted_recordings": interrupted,
+            },
+            status=status.HTTP_200_OK,
+        )
