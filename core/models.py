@@ -7,6 +7,7 @@ from django.db import models
 from django.utils.text import slugify
 from django.core.exceptions import ValidationError
 
+from .recording_protection import RecordingProtectionConfig, get_recording_protection_defaults
 
 class UserAgent(models.Model):
     name = models.CharField(
@@ -155,6 +156,7 @@ BACKUP_SETTINGS_KEY = "backup_settings"
 PROXY_SETTINGS_KEY = "proxy_settings"
 NETWORK_ACCESS_KEY = "network_access"
 SYSTEM_SETTINGS_KEY = "system_settings"
+RECORDING_PROTECTION_KEY = "recording_protection"
 
 
 class CoreSettings(models.Model):
@@ -306,6 +308,13 @@ class CoreSettings(models.Model):
             "channel_shutdown_delay": 0,
             "channel_init_grace_period": 5,
         })
+
+    # Recording Protection Settings
+    @classmethod
+    def get_recording_protection_settings(cls):
+        """Get recording protection settings with validation."""
+        settings = cls._get_group(RECORDING_PROTECTION_KEY, get_recording_protection_defaults())
+        return RecordingProtectionConfig.load(settings)
 
     # System Settings
     @classmethod

@@ -3,7 +3,10 @@ import json
 import ipaddress
 
 from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
+
 from .models import CoreSettings, UserAgent, StreamProfile, NETWORK_ACCESS_KEY
+from .recording_protection import normalize_recording_protection_settings
 
 
 class UserAgentSerializer(serializers.ModelSerializer):
@@ -98,3 +101,23 @@ class ProxySettingsSerializer(serializers.Serializer):
         if value < 0 or value > 60:
             raise serializers.ValidationError("Channel init grace period must be between 0 and 60 seconds")
         return value
+
+
+class RecordingProtectionSettingsSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    max_concurrent_streams = serializers.IntegerField(min_value=0)
+    reserved_for_recording = serializers.IntegerField(min_value=0)
+    allow_override = serializers.BooleanField()
+    override_requires_confirmation = serializers.BooleanField()
+    override_confirmation_text = serializers.CharField(allow_blank=True)
+    notify_on_block = serializers.BooleanField()
+    notify_on_override = serializers.BooleanField()
+    lock_buffer_minutes = serializers.IntegerField(min_value=0)
+
+    def validate(self, attrs):
+        try:
+            return normalize_recording_protection_settings(attrs)
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict"):
+                raise serializers.ValidationError(exc.message_dict)
+            raise serializers.ValidationError({"recording_protection": exc.messages})

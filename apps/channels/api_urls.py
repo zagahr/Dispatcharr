@@ -21,6 +21,9 @@ from .api_views import (
     BulkRemoveSeriesRecordingsAPIView,
     BulkDeleteUpcomingRecordingsAPIView,
     ComskipConfigAPIView,
+    RecordingLockStatusAPIView,
+    RecordingLockOverrideAPIView,
+    RecordingLockHistoryAPIView,
 )
 
 app_name = 'channels'  # for DRF routing
@@ -49,6 +52,9 @@ urlpatterns = [
     path('series-rules/bulk-remove/', BulkRemoveSeriesRecordingsAPIView.as_view(), name='bulk_remove_series_recordings'),
     path('series-rules/<path:tvg_id>/', DeleteSeriesRuleAPIView.as_view(), name='delete_series_rule'),
     path('recordings/bulk-delete-upcoming/', BulkDeleteUpcomingRecordingsAPIView.as_view(), name='bulk_delete_upcoming_recordings'),
+    path('recording-lock/status/', RecordingLockStatusAPIView.as_view(), name='recording_lock_status'),
+    path('recording-lock/override/', RecordingLockOverrideAPIView.as_view(), name='recording_lock_override'),
+    path('recording-lock/history/', RecordingLockHistoryAPIView.as_view(), name='recording_lock_history'),
     path('dvr/comskip-config/', ComskipConfigAPIView.as_view(), name='comskip_config'),
 ]
 
